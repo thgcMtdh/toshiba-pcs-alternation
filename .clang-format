@@ -1,0 +1,16 @@
+# 参考: https://scrapbox.io/craftmemo/Visual_Studio_Code_%E3%81%AE%E8%87%AA%E5%8B%95%E6%95%B4%E5%BD%A2
+BasedOnStyle: LLVM               # LLVM をベースにする
+UseTab: Never                    # Tabは使わない
+IndentWidth: 2                   # インデント幅
+TabWidth: 2                      # タブ幅
+ColumnLimit: 0                   # 1行あたりの文字長さ(超えると改行が入り、0で無効)
+AlignTrailingComments: true      # 行末コメント文の開始位置をそろえる
+SpacesBeforeTrailingComments: 2  # コメントの前に2スペース入れる
+BreakBeforeBraces: Linux         # 関数や名前空間、クラス定義の前は{}を改行する
+ConstructorInitializerIndentWidth: 2
+IndentCaseLabels: true           # case文をインデントする
+AlignAfterOpenBracket: true      # 引数を改行した際に位置をそろえる
+AlignOperands: true              # 式途中の改行で位置を揃える
+BreakConstructorInitializersBeforeComma: false
+AllowShortIfStatementsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: true
