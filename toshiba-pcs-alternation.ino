@@ -10,15 +10,23 @@
 #define PIN_SENSE_PV A2  // PV入力電圧の分圧入力
 #define PIN_SENSE_DC A3  // DCリンク電圧の分圧入力
 
+#define SAMPLE_NUM 32  // 電圧・電流計測の平均化サンプリング数
+#define GRID_LED_THRESHOLD 200 // 連系LED点灯判定閾値(0～1023)
+#define WAIT_TIME 10000        // 連系LED点灯後、こちらからゲート制御を始めるまでの待機時間[ms]
 #define FREQ_PWM 8000  // PWM周波数[Hz]
 #define MAX_DUTY 80
 #define MIN_DUTY 0
 #define MAX_SERIAL_BUF 32
 
+uint16_t voltage_dc_raw[SAMPLE_NUM];
+uint16_t voltage_pv_raw[SAMPLE_NUM];
+uint16_t current_pv_raw[SAMPLE_NUM];
+
 uint32_t voltage_dc = 15;  // 計測したDCリンク電圧[mV]
 uint32_t voltage_pv = 15;  // 計測した入力電圧[mV]
 uint32_t current_pv = 30;  // 計測した入力電流[mA]
-uint16_t val_photod = 0;   // フォトダイオードの読み値
+unsigned int val_photod = 0;   // フォトダイオードの読み値
+unsigned long grid_connected_time = 0;  // 連系開始時刻[ms]
 uint8_t dutyCommand = 0;   // シリアルで受信したデューティー比の指令値[%]
 uint8_t dutyActual = 0;    // 実際に昇圧チョッパのIGBTを駆動するデューティー比[%]
 
@@ -32,33 +40,76 @@ void setup()
   pinMode(PIN_PCS_PWM, INPUT);
   pinMode(PIN_RELAY, OUTPUT);
   pinMode(PIN_PWM, OUTPUT);
+  digitalWrite(PIN_RELAY, LOW);
   // PWM設定
   TCCR1A = 0b00110001;              // 比較1A出力=なし,比較1B出力=反転出力,OCR1AをTOPとする位相/周波数基準PWM動作
   TCCR1B = 0b00010001;              // 捕獲入力=無効,OCR1AをTOPとする位相/周波数基準PWM動作,分周なし
   OCR1A = 16000000 / 2 / FREQ_PWM;  // TOP値を設定
   // TIMSK1 = 0b00000001;              // タイマ/カウンタ1溢れ割り込み許可(BOTTOM値でOVF割り込みがかかる)
+
+  for (size_t i=0; i<SAMPLE_NUM; i++) {
+    voltage_dc_raw[i] = 0;
+    voltage_pv_raw[i] = 0;
+    current_pv_raw[i] = 0;
+  }
 }
 
 void loop()
 {
+  // 現在時刻と1ループの周期を取得
+  static unsigned long period = 0;
+  static unsigned long t_old = 0;
+  static unsigned long t_now = 0;
+  t_old = t_now;
+  t_now = millis();
+  period = t_now - t_old;
+  Serial.print(period);
+  Serial.print(",");
+  
   // 電圧電流計測
-  voltage_dc = ((uint32_t)analogRead(PIN_SENSE_DC) * 443892) / 1000;   // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
-  voltage_pv = ((uint32_t)analogRead(PIN_SENSE_PV) * 443892) / 1000;   // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
-  current_pv = ((uint32_t)analogRead(PIN_SENSE_I) * 837296) / 100000;  // analogRead()/1024 * 5.0V * 0.986/46.0 * 1000 * 80mA/mV [mA]
+  static size_t i_adc = 0;
+  voltage_dc_raw[i_adc] = analogRead(PIN_SENSE_DC);
+  voltage_pv_raw[i_adc] = analogRead(PIN_SENSE_PV);
+  current_pv_raw[i_adc] = analogRead(PIN_SENSE_I);
+  i_adc++;
+  if (i_adc>=SAMPLE_NUM) {
+    i_adc = 0;
+  }
+  
+  voltage_dc = ((uint32_t)average(voltage_dc_raw, SAMPLE_NUM) * 443892) / 1000;   // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
+  voltage_pv = ((uint32_t)average(voltage_pv_raw, SAMPLE_NUM) * 443892) / 1000;   // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
+  current_pv = ((uint32_t)average(current_pv_raw, SAMPLE_NUM) * 837296) / 100000;  // analogRead()/1024 * 5.0V * 0.986/46.0 * 1000 * 80mA/mV [mA]
   Serial.print(voltage_dc);
   Serial.print(",");
   Serial.print(voltage_pv);
   Serial.print(",");
-  Serial.println(current_pv);
+  Serial.print(current_pv);
 
   // 連系運転検知用フォトダイオードの読みを取得
-  val_photod = analogRead(PIN_PHOTOD);
+  unsigned int new_val_photod = analogRead(PIN_PHOTOD);
+  Serial.print(",");
+  Serial.println(new_val_photod);
 
-  // 実出力Duty比設定 (本来は過電流/過電圧保護を考慮して0に落としたりする)
-  dutyActual = dutyCommand;
+  // 連系LEDの消灯→点灯を検知したら時刻を記録し、点灯→消灯を検知したら時刻をクリア
+  if (val_photod < GRID_LED_THRESHOLD && new_val_photod >= GRID_LED_THRESHOLD) {
+    grid_connected_time = t_now;
+  } else if (val_photod >= GRID_LED_THRESHOLD && new_val_photod < GRID_LED_THRESHOLD) {
+    grid_connected_time = 0;
+  }
+  val_photod = new_val_photod;
 
-  // duty比反映
-  OCR1B = 16000000 / 2 / FREQ_PWM / 100 * dutyActual;
+  // 連系LED点灯からWAIT_TIME以上経過していたら、ゲート信号をArduinoから出力する
+  if (val_photod >= GRID_LED_THRESHOLD && t_now - grid_connected_time >= WAIT_TIME) {
+    dutyActual = dutyCommand;  // 実出力Duty比設定 (本来は過電流/過電圧保護を考慮して0に落としたりする)
+    OCR1B = 16000000 / 2 / FREQ_PWM / 100 * dutyActual; // duty比反映
+    digitalWrite(PIN_RELAY, HIGH);
+  
+  // 連系LED消灯時はPCSのゲート信号を素通しする
+  } else {
+    dutyActual = 0;
+    OCR1B = 0;
+    digitalWrite(PIN_RELAY, LOW);
+  }
 
   // シリアル通信
   static char buf[MAX_SERIAL_BUF];  // シリアル受信文字列を格納するバッファ
@@ -135,4 +186,18 @@ void loop()
 bool isNumber(char c)
 {
   return (c >= '0' && c <= '9');
+}
+
+/**
+ * @brief 配列要素を平均する
+ * @param p_array 平均したいデータが入った配列
+ * @param num 平均するサンプル数
+ */
+uint16_t average(uint16_t* p_array, uint16_t num)
+{
+  uint32_t sum = 0;
+  for (size_t i=0; i<num; i++) {
+    sum += p_array[i];
+  }
+  return (uint16_t)(sum / num);
 }
