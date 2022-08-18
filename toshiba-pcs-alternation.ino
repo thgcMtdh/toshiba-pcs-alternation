@@ -2,7 +2,7 @@
 //#include <avr/interrupt.h>
 #include <avr/io.h>
 
-#define PIN_PCS_PWM 8    // PCSからのゲートPWM信号
+#define PIN_PCS_PWM 3    // PCSからのゲートPWM信号
 #define PIN_RELAY 9      // ゲート入力切替リレー
 #define PIN_PWM 10       // ゲートPWM信号OC1B。PB2から出力され、PB2は基板上でpin10につながっている
 #define PIN_PHOTOD A0    // 連系LED検出用フォトダイオードからのアナログ入力
@@ -12,8 +12,8 @@
 
 #define SAMPLE_NUM 32           // 電圧・電流計測の平均化サンプリング数
 #define GRID_LED_THRESHOLD 200  // 連系LED点灯判定閾値(0～1023)
-#define WAIT_TIME 10000         // 連系LED点灯後、こちらからゲート制御を始めるまでの待機時間[ms]
-#define FREQ_PWM 8000           // PWM周波数[Hz]
+#define WAIT_TIME 60000         // 連系LED点灯後、こちらからゲート制御を始めるまでの待機時間[ms]
+#define FREQ_PWM 20000          // PWM周波数[Hz]。実測の結果20kHzだったので合わせた
 #define MAX_DUTY 80
 #define MIN_DUTY 0
 #define MAX_SERIAL_BUF 32
@@ -29,15 +29,23 @@ unsigned int val_photod = 0;            // フォトダイオードの読み値
 unsigned long grid_connected_time = 0;  // 連系開始時刻[ms]
 uint8_t dutyCommand = 0;                // シリアルで受信したデューティー比の指令値[%]
 uint8_t dutyActual = 0;                 // 実際に昇圧チョッパのIGBTを駆動するデューティー比[%]
+uint16_t pwmfreq = 0;                   // PCSのPWM周波数計測結果[Hz]
+volatile uint16_t counter = 0;          // PCSのPWM周波数計測用のカウンター
 
 // ISR(TIMER1_OVF_vect)
 // {
 // }
 
+void count_pwmfreq()
+{
+  counter++;
+}
+
 void setup()
 {
   Serial.begin(9600);
-  pinMode(PIN_PCS_PWM, INPUT);
+  pinMode(PIN_PCS_PWM, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(PIN_PCS_PWM), count_pwmfreq, FALLING);
   pinMode(PIN_RELAY, OUTPUT);
   pinMode(PIN_PWM, OUTPUT);
   digitalWrite(PIN_RELAY, LOW);
@@ -63,8 +71,6 @@ void loop()
   t_old = t_now;
   t_now = millis();
   period = t_now - t_old;
-  Serial.print(period);
-  Serial.print(",");
 
   // 電圧電流計測
   static size_t i_adc = 0;
@@ -111,6 +117,16 @@ void loop()
     digitalWrite(PIN_RELAY, LOW);
   }
 
+  // PCSのPWM周波数計測(確認用)
+  static unsigned long t_print_pwmfreq = 0;
+  if (t_now - t_print_pwmfreq > 1000) {
+    pwmfreq = counter;  // 約1secおきにcounterの値を確認して周波数とし、リセット
+    counter = 0;
+    t_print_pwmfreq = t_now;
+  }
+  // Serial.print(",");
+  // Serial.println(pwmfreq);
+
   // シリアル通信
   static char buf[MAX_SERIAL_BUF];  // シリアル受信文字列を格納するバッファ
   static size_t i = 0;              // シリアル受信文字列バッファの何文字目に書き込んでいるか
@@ -127,14 +143,18 @@ void loop()
 
     if (buf[0] == 'g' && buf[1] == 'e' && buf[2] == 't') {  // get要求
 
-      if (buf[3] == 'V') {           // 続く文字が'V'
-        Serial.println(voltage_pv);  // mV単位でprint
-      } else if (buf[3] == 'I') {    // 続く文字が'I'
-        Serial.println(current_pv);  // mA単位でprint
-      } else if (buf[3] == 'D') {    // 続く文字が'D'
-        Serial.println(dutyActual);  // duty比をprint
-      } else {                       // 続く文字がどれにも当てはまらない
-        Serial.println("0");         // '0'を送信
+      if (buf[3] == 'V') {                       // 続く文字が'V'
+        Serial.println(voltage_pv);              // mV単位でprint
+      } else if (buf[3] == 'I') {                // 続く文字が'I'
+        Serial.println(current_pv);              // mA単位でprint
+      } else if (buf[3] == 'D') {                // 続く文字が'D'
+        Serial.println(dutyActual);              // duty比をprint
+      } else if (buf[3] == 'U') {                // 続く文字が'U'
+        Serial.println(voltage_dc);              // DCリンク電圧をprint
+      } else if (buf[3] == 'S') {                // 続く文字が'S'
+        Serial.println(digitalRead(PIN_RELAY));  // ゲート入力切替リレーのステータスをprint
+      } else {                                   // 続く文字がどれにも当てはまらない
+        Serial.println("0");                     // '0'を送信
       }
 
     } else if (buf[0] == 's' && buf[1] == 'e' && buf[2] == 't') {  // set要求
