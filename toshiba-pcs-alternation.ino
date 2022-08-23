@@ -2,6 +2,8 @@
 //#include <avr/interrupt.h>
 #include <avr/io.h>
 
+// #define DEBUG  // 本番ではコメントアウト、デバッグprintするときは宣言する
+
 #define PIN_PCS_PWM 3    // PCSからのゲートPWM信号
 #define PIN_RELAY 9      // ゲート入力切替リレー
 #define PIN_PWM 10       // ゲートPWM信号OC1B。PB2から出力され、PB2は基板上でpin10につながっている
@@ -85,16 +87,20 @@ void loop()
   voltage_dc = ((uint32_t)average(voltage_dc_raw, SAMPLE_NUM) * 443892) / 1000;    // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
   voltage_pv = ((uint32_t)average(voltage_pv_raw, SAMPLE_NUM) * 443892) / 1000;    // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
   current_pv = ((uint32_t)average(current_pv_raw, SAMPLE_NUM) * 837296) / 100000;  // analogRead()/1024 * 5.0V * 0.986/46.0 * 1000 * 80mA/mV [mA]
+#ifdef DEBUG
   Serial.print(voltage_dc);
   Serial.print(",");
   Serial.print(voltage_pv);
   Serial.print(",");
   Serial.print(current_pv);
+#endif
 
   // 連系運転検知用フォトダイオードの読みを取得
   unsigned int new_val_photod = analogRead(PIN_PHOTOD);
+#ifdef DEBUG
   Serial.print(",");
   Serial.println(new_val_photod);
+#endif
 
   // 連系LEDの消灯→点灯を検知したら時刻を記録し、点灯→消灯を検知したら時刻をクリア
   if (val_photod < GRID_LED_THRESHOLD && new_val_photod >= GRID_LED_THRESHOLD) {
@@ -124,8 +130,10 @@ void loop()
     counter = 0;
     t_print_pwmfreq = t_now;
   }
+#ifdef DEBUG
   // Serial.print(",");
   // Serial.println(pwmfreq);
+#endif
 
   // シリアル通信
   static char buf[MAX_SERIAL_BUF];  // シリアル受信文字列を格納するバッファ
@@ -161,7 +169,7 @@ void loop()
 
       if (buf[3] == 'D') {  // 続く文字がD: デューティー比
         uint8_t newduty = 0;
-        switch (i) {  // setD + 数値 + 改行コード の文字数で分岐
+        switch (i) {  // setD + 数値 + 改行コード\n の文字数で分岐(CRLFだとバグる)
           case 6:     // 数値が1文字のとき
             if (isNumber(buf[4])) {
               newduty = buf[4] - '0';
