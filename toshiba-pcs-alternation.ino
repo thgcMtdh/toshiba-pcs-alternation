@@ -2,7 +2,7 @@
 //#include <avr/interrupt.h>
 #include <avr/io.h>
 
-// #define DEBUG  // 本番ではコメントアウト、デバッグprintするときは宣言する
+#define DEBUG  // 本番ではコメントアウト、デバッグprintするときは宣言する
 
 #define PIN_GRID_SW 2    // 連系SW
 #define PIN_PCS_PWM 3    // PCSからのゲートPWM信号
@@ -21,6 +21,9 @@
 #define MIN_DUTY 0
 #define MAX_SERIAL_BUF 32
 
+#define OVP_SET_VOLT 390000    // 過電圧フラグをセットする電圧[mV]
+#define OVP_CLEAR_VOLT 200000  // 過電圧フラグをクリアする電圧[mV]
+
 uint16_t voltage_dc_raw[SAMPLE_NUM];
 uint16_t voltage_pv_raw[SAMPLE_NUM];
 uint16_t current_pv_raw[SAMPLE_NUM];
@@ -35,6 +38,7 @@ uint8_t dutyActual = 0;                 // 実際に昇圧チョッパのIGBTを
 uint8_t grid_sw_command = 0;            // 連系スイッチON/OFF指令(0:OFF, 1:ON)
 uint16_t pwmfreq = 0;                   // PCSのPWM周波数計測結果[Hz]
 volatile uint16_t counter = 0;          // PCSのPWM周波数計測用のカウンター
+bool flag_ov = false;                   // 過電圧検出フラグ(0:正常, 1:発生)
 
 // ISR(TIMER1_OVF_vect)
 // {
@@ -99,6 +103,15 @@ void loop()
   Serial.print(current_pv);
 #endif
 
+  // 二次側過電圧判定 (ヒステリシスを設ける)
+  if (voltage_dc > OVP_SET_VOLT) {
+    flag_ov = true;
+  } else if (voltage_dc < OVP_CLEAR_VOLT) {
+    flag_ov = false;
+  } else {
+    // pass
+  }
+
   // 連系運転検知用フォトダイオードの読みを取得
   unsigned int new_val_photod = analogRead(PIN_PHOTOD);
 #ifdef DEBUG
@@ -116,7 +129,11 @@ void loop()
 
   // 連系LED点灯からWAIT_TIME以上経過していたら、ゲート信号をArduinoから出力する
   if (val_photod >= GRID_LED_THRESHOLD && t_now - grid_connected_time >= WAIT_TIME) {
-    dutyActual = dutyCommand;                            // 実出力Duty比設定 (本来は過電流/過電圧保護を考慮して0に落としたりする)
+    if (flag_ov) {  // 過電圧フラグが立っているときはDuty比ゼロ
+      dutyActual = 0;
+    } else {
+      dutyActual = dutyCommand;
+    }
     OCR1B = 16000000 / 2 / FREQ_PWM / 100 * dutyActual;  // duty比反映
     digitalWrite(PIN_RELAY, HIGH);
 
