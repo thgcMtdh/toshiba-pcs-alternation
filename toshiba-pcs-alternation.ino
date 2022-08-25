@@ -4,6 +4,7 @@
 
 // #define DEBUG  // 本番ではコメントアウト、デバッグprintするときは宣言する
 
+#define PIN_GRID_SW 2    // 連系SW
 #define PIN_PCS_PWM 3    // PCSからのゲートPWM信号
 #define PIN_RELAY 9      // ゲート入力切替リレー
 #define PIN_PWM 10       // ゲートPWM信号OC1B。PB2から出力され、PB2は基板上でpin10につながっている
@@ -31,6 +32,7 @@ unsigned int val_photod = 0;            // フォトダイオードの読み値
 unsigned long grid_connected_time = 0;  // 連系開始時刻[ms]
 uint8_t dutyCommand = 0;                // シリアルで受信したデューティー比の指令値[%]
 uint8_t dutyActual = 0;                 // 実際に昇圧チョッパのIGBTを駆動するデューティー比[%]
+uint8_t grid_sw_command = 0;            // 連系スイッチON/OFF指令(0:OFF, 1:ON)
 uint16_t pwmfreq = 0;                   // PCSのPWM周波数計測結果[Hz]
 volatile uint16_t counter = 0;          // PCSのPWM周波数計測用のカウンター
 
@@ -46,10 +48,12 @@ void count_pwmfreq()
 void setup()
 {
   Serial.begin(9600);
+  pinMode(PIN_GRID_SW, OUTPUT);
   pinMode(PIN_PCS_PWM, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PIN_PCS_PWM), count_pwmfreq, FALLING);
   pinMode(PIN_RELAY, OUTPUT);
   pinMode(PIN_PWM, OUTPUT);
+  digitalWrite(PIN_GRID_SW, LOW);
   digitalWrite(PIN_RELAY, LOW);
   // PWM設定
   TCCR1A = 0b00110001;              // 比較1A出力=なし,比較1B出力=反転出力,OCR1AをTOPとする位相/周波数基準PWM動作
@@ -123,6 +127,9 @@ void loop()
     digitalWrite(PIN_RELAY, LOW);
   }
 
+  // 連系SWのON/OFF
+  digitalWrite(PIN_GRID_SW, grid_sw_command);
+
   // PCSのPWM周波数計測(確認用)
   static unsigned long t_print_pwmfreq = 0;
   if (t_now - t_print_pwmfreq > 1000) {
@@ -148,55 +155,70 @@ void loop()
   }
 
   if (buf[i - 1] == '\n') {  // bufの末尾が改行コードだった場合、コマンドがそこで終わるので、デコード開始
+    if (buf[i - 2] != '\r') {  // CRLFだった場合は弾く
 
-    if (buf[0] == 'g' && buf[1] == 'e' && buf[2] == 't') {  // get要求
+      if (buf[0] == 'g' && buf[1] == 'e' && buf[2] == 't') {  // get要求
 
-      if (buf[3] == 'V') {                       // 続く文字が'V'
-        Serial.println(voltage_pv);              // mV単位でprint
-      } else if (buf[3] == 'I') {                // 続く文字が'I'
-        Serial.println(current_pv);              // mA単位でprint
-      } else if (buf[3] == 'D') {                // 続く文字が'D'
-        Serial.println(dutyActual);              // duty比をprint
-      } else if (buf[3] == 'U') {                // 続く文字が'U'
-        Serial.println(voltage_dc);              // DCリンク電圧をprint
-      } else if (buf[3] == 'S') {                // 続く文字が'S'
-        Serial.println(digitalRead(PIN_RELAY));  // ゲート入力切替リレーのステータスをprint
-      } else {                                   // 続く文字がどれにも当てはまらない
-        Serial.println("0");                     // '0'を送信
-      }
-
-    } else if (buf[0] == 's' && buf[1] == 'e' && buf[2] == 't') {  // set要求
-
-      if (buf[3] == 'D') {  // 続く文字がD: デューティー比
-        uint8_t newduty = 0;
-        switch (i) {  // setD + 数値 + 改行コード\n の文字数で分岐(CRLFだとバグる)
-          case 6:     // 数値が1文字のとき
-            if (isNumber(buf[4])) {
-              newduty = buf[4] - '0';
-            }
-            break;
-          case 7:  // 数値が2文字のとき
-            if (isNumber(buf[4]) && isNumber(buf[5])) {
-              newduty = 10 * (buf[4] - '0') + buf[5] - '0';
-            }
-            break;
-          case 8:  // 数値が3文字のとき
-            if (isNumber(buf[4]) && isNumber(buf[5]) && isNumber(buf[6])) {
-              newduty = 100 * (buf[4] - '0') + 10 * (buf[5] - '0') + buf[6] - '0';
-            }
-          default:
-            break;
+        if (buf[3] == 'V') {                       // 続く文字が'V'
+          Serial.println(voltage_pv);              // mV単位でprint
+        } else if (buf[3] == 'I') {                // 続く文字が'I'
+          Serial.println(current_pv);              // mA単位でprint
+        } else if (buf[3] == 'D') {                // 続く文字が'D'
+          Serial.println(dutyActual);              // duty比をprint
+        } else if (buf[3] == 'U') {                // 続く文字が'U'
+          Serial.println(voltage_dc);              // DCリンク電圧をprint
+        } else if (buf[3] == 'S') {                // 続く文字が'S'
+          Serial.println(digitalRead(PIN_RELAY));  // ゲート入力切替リレーのステータスをprint
+        } else if (buf[3] == 'G') {                // 続く文字が'G'
+          Serial.println(digitalRead(PIN_GRID_SW));// 連系SWへの指令値をprint
+        } else {                                   // 続く文字がどれにも当てはまらない
+          Serial.println("0");                     // '0'を送信
         }
-        if (newduty < MIN_DUTY) newduty = MIN_DUTY;
-        if (newduty > MAX_DUTY) newduty = MAX_DUTY;
 
-        dutyCommand = newduty;        // 受け取った値を代入
-        Serial.println(dutyCommand);  // 代入した値を返す
+      } else if (buf[0] == 's' && buf[1] == 'e' && buf[2] == 't') {  // set要求
 
-      } else {                // 続く文字がどれにも当てはまらない
+        if (buf[3] == 'D') {  // 続く文字がD: デューティー比
+          uint8_t newduty = 0;
+          switch (i) {  // setD + 数値 + 改行コード\n の文字数で分岐(CRLFだとバグる)
+            case 6:     // 数値が1文字のとき
+              if (isNumber(buf[4])) {
+                newduty = buf[4] - '0';
+              }
+              break;
+            case 7:  // 数値が2文字のとき
+              if (isNumber(buf[4]) && isNumber(buf[5])) {
+                newduty = 10 * (buf[4] - '0') + buf[5] - '0';
+              }
+              break;
+            case 8:  // 数値が3文字のとき
+              if (isNumber(buf[4]) && isNumber(buf[5]) && isNumber(buf[6])) {
+                newduty = 100 * (buf[4] - '0') + 10 * (buf[5] - '0') + buf[6] - '0';
+              }
+            default:
+              break;
+          }
+          if (newduty < MIN_DUTY) newduty = MIN_DUTY;
+          if (newduty > MAX_DUTY) newduty = MAX_DUTY;
+
+          dutyCommand = newduty;        // 受け取った値を代入
+          Serial.println(dutyCommand);  // 代入した値を返す
+
+        } else if (buf[3] == 'G') {  // 続く文字がG: 連系SW
+          uint8_t command = buf[4] - '0';  // '0'か'1'が期待されるので、数値に変換
+          if (command == 1) {  // 1だった場合に限り連系SW指令をON。他(0または2以上の値)はすべて0とする
+            grid_sw_command = 1;
+          } else {
+            grid_sw_command = 0;
+          }
+          Serial.println(grid_sw_command);
+
+        } else {                // 続く文字がどれにも当てはまらない
+          Serial.println("0");  // 0を返す
+        }
+      } else {                // getでもsetでもない何か
         Serial.println("0");  // 0を返す
       }
-    } else {                // getでもsetでもない何か
+    } else {  // 改行コードがCRLFだった場合
       Serial.println("0");  // 0を返す
     }
     i = 0;                        // インデックスをクリア
