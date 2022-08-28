@@ -2,7 +2,7 @@
 //#include <avr/interrupt.h>
 #include <avr/io.h>
 
-#define DEBUG  // 本番ではコメントアウト、デバッグprintするときは宣言する
+// #define DEBUG  // 本番ではコメントアウト、デバッグprintするときは宣言する
 
 #define PIN_GRID_SW 2    // 連系SW
 #define PIN_PCS_PWM 3    // PCSからのゲートPWM信号
@@ -21,7 +21,7 @@
 #define MIN_DUTY 0
 #define MAX_SERIAL_BUF 32
 
-#define OVP_SET_VOLT 390000    // 過電圧フラグをセットする電圧[mV]
+#define OVP_SET_VOLT 385000    // 過電圧フラグをセットする電圧[mV]
 #define OVP_CLEAR_VOLT 200000  // 過電圧フラグをクリアする電圧[mV]
 
 uint16_t voltage_dc_raw[SAMPLE_NUM];
@@ -101,6 +101,7 @@ void loop()
   Serial.print(voltage_pv);
   Serial.print(",");
   Serial.print(current_pv);
+  Serial.print(",");
 #endif
 
   // 二次側過電圧判定 (ヒステリシスを設ける)
@@ -115,7 +116,6 @@ void loop()
   // 連系運転検知用フォトダイオードの読みを取得
   unsigned int new_val_photod = analogRead(PIN_PHOTOD);
 #ifdef DEBUG
-  Serial.print(",");
   Serial.println(new_val_photod);
 #endif
 
