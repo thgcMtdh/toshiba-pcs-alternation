@@ -2,7 +2,7 @@
 //#include <avr/interrupt.h>
 #include <avr/io.h>
 
-// #define DEBUG  // 本番ではコメントアウト、デバッグprintするときは宣言する
+#define DEBUG  // 本番ではコメントアウト、デバッグprintするときは宣言する
 
 #define PIN_GRID_SW 2    // 連系SW
 #define PIN_PCS_PWM 3    // PCSからのゲートPWM信号
@@ -92,16 +92,18 @@ void loop()
     i_adc = 0;
   }
 
-  voltage_dc = ((uint32_t)average(voltage_dc_raw, SAMPLE_NUM) * 443892) / 1000;    // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
-  voltage_pv = ((uint32_t)average(voltage_pv_raw, SAMPLE_NUM) * 443892) / 1000;    // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
-  current_pv = ((uint32_t)average(current_pv_raw, SAMPLE_NUM) * 837296) / 100000;  // analogRead()/1024 * 5.0V * 0.986/46.0 * 1000 * 80mA/mV [mA]
+  // voltage_dc = ((uint32_t)average(voltage_dc_raw, SAMPLE_NUM) * 443892) / 1000;    // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
+  // voltage_pv = ((uint32_t)average(voltage_pv_raw, SAMPLE_NUM) * 443892) / 1000;    // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
+  // current_pv = ((uint32_t)average(current_pv_raw, SAMPLE_NUM) * 837296) / 100000;  // analogRead()/1024 * 5.0V * 0.986/46.0 * 1000 * 80mA/mV [mA]
+  voltage_dc = average(voltage_dc_raw, SAMPLE_NUM);  // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
+  voltage_pv = average(voltage_pv_raw, SAMPLE_NUM);  // analogRead()/1024 * 5.0V * 300/3.3 * 1000 [mV]
+  current_pv = average(current_pv_raw, SAMPLE_NUM);  // analogRead()/1024 * 5.0V * 0.986/46.0 * 1000 * 80mA/mV [mA]
 #ifdef DEBUG
   Serial.print(voltage_dc);
   Serial.print(",");
   Serial.print(voltage_pv);
   Serial.print(",");
-  Serial.print(current_pv);
-  Serial.print(",");
+  Serial.println(current_pv);
 #endif
 
   // 二次側過電圧判定 (ヒステリシスを設ける)
@@ -116,7 +118,7 @@ void loop()
   // 連系運転検知用フォトダイオードの読みを取得
   unsigned int new_val_photod = analogRead(PIN_PHOTOD);
 #ifdef DEBUG
-  Serial.println(new_val_photod);
+  // Serial.println(new_val_photod);
 #endif
 
   // 連系LEDの消灯→点灯を検知したら時刻を記録し、点灯→消灯を検知したら時刻をクリア
@@ -129,13 +131,16 @@ void loop()
 
   // 連系LED点灯からWAIT_TIME以上経過していたら、ゲート信号をArduinoから出力する
   if (val_photod >= GRID_LED_THRESHOLD && t_now - grid_connected_time >= WAIT_TIME) {
-    if (flag_ov) {  // 過電圧フラグが立っているときはDuty比ゼロ
-      dutyActual = 0;
-    } else {
-      dutyActual = dutyCommand;
-    }
-    OCR1B = 16000000 / 2 / FREQ_PWM / 100 * dutyActual;  // duty比反映
-    digitalWrite(PIN_RELAY, HIGH);
+    // if (flag_ov) {  // 過電圧フラグが立っているときはDuty比ゼロ
+    //   dutyActual = 0;
+    // } else {
+    //   dutyActual = dutyCommand;
+    // }
+    // OCR1B = 16000000 / 2 / FREQ_PWM / 100 * dutyActual;  // duty比反映
+    // digitalWrite(PIN_RELAY, HIGH);
+    dutyActual = 0;
+    OCR1B = 0;
+    digitalWrite(PIN_RELAY, LOW);
 
     // 連系LED消灯時はPCSのゲート信号を素通しする
   } else {
