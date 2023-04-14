@@ -43,13 +43,13 @@ unsigned int val_photod = 0;            // フォトダイオードの読み値
 unsigned long grid_connected_time = 0;  // 連系開始時刻[ms]
 
 uint8_t duty_received = 0;   // シリアルで受信したデューティー比の指令値[%]
-bool grid_sw_received = 0;   // シリアルで受信した連系指令(false:OFF, true:ON)
-bool dc_relay_received = 0;  // シリアルで受信した保護DCリレー指令(false:OFF, true:ON)
+int grid_sw_received = 0;   // シリアルで受信した連系指令(0:OFF, 1:ON)
+int dc_relay_received = 0;  // シリアルで受信した保護DCリレー指令(0:OFF, 1:ON)
 
 uint8_t duty_command = 0;     // 実際に昇圧チョッパのIGBTを駆動するデューティー比[%]
-bool grid_sw_command = 0;     // 連系スイッチON/OFF指令(false:OFF, true:ON)
-bool dc_relay_command = 0;    // 保護ボックスのDCリレーON/OFF指令(false:OFF, true:ON)
-bool gate_relay_command = 0;  // ゲート入力切替リレー指令(false:PCS側素通し, true:自前の信号利用)
+int grid_sw_command = 0;     // 連系スイッチON/OFF指令(0:OFF, 1:ON)
+int dc_relay_command = 0;    // 保護ボックスのDCリレーON/OFF指令(0:OFF, 1:ON)
+int gate_relay_command = 0;  // ゲート入力切替リレー指令(0:PCS側素通し, 1:自前の信号利用)
 
 uint16_t pwmfreq = 0;           // PCSのPWM周波数計測結果[Hz]
 volatile uint16_t counter = 0;  // PCSのPWM周波数計測用のカウンター
@@ -71,9 +71,11 @@ void setup()
   pinMode(PIN_GRID_SW, OUTPUT);
   pinMode(PIN_PCS_PWM, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(PIN_PCS_PWM), count_pwmfreq, FALLING);
+  pinMode(PIN_DC_RELAY, OUTPUT);
   pinMode(PIN_GATE_RELAY, OUTPUT);
   pinMode(PIN_PWM, OUTPUT);
   digitalWrite(PIN_GRID_SW, LOW);
+  digitalWrite(PIN_DC_RELAY, LOW);
   digitalWrite(PIN_GATE_RELAY, LOW);
   // PWM設定
   TCCR1A = 0b00110001;              // 比較1A出力=なし,比較1B出力=反転出力,OCR1AをTOPとする位相/周波数基準PWM動作
@@ -134,15 +136,15 @@ void loop()
   }
 
   // 保護フラグのリセットは、DCリレー指令がOFFに戻ったとき行う
-  if (!ov && !oc && dc_relay_received == false) {
+  if (!ov && !oc && dc_relay_received == 0) {
     protection_flag = 0;
   }
 
   // 保護フラグが立っていないときに限りDCリレーをONする
-  if (dc_relay_received == true && protection_flag == 0) {
-    dc_relay_command = true;
+  if (dc_relay_received == 1 && protection_flag == 0) {
+    dc_relay_command = 1;
   } else {
-    dc_relay_command = false;
+    dc_relay_command = 0;
   }
 
 #ifdef GRID_TIED
@@ -167,7 +169,7 @@ void loop()
 
   // 連系LED点灯からWAIT_TIME以上経過していたら、ゲート信号をArduinoから出力する
   if (val_photod >= GRID_LED_THRESHOLD && t_now - grid_connected_time >= WAIT_TIME) {
-    gate_relay_command = true;
+    gate_relay_command = 1;
     if (protection_flag) {  // 保護フラグが立っているときはDuty比ゼロ(ゲートブロック)
       duty_command = 0;
     } else {
@@ -176,7 +178,7 @@ void loop()
 
     // 連系LED消灯時はPCSのゲート信号を素通しする
   } else {
-    gate_relay_command = false;
+    gate_relay_command = 0;
     duty_command = 0;
   }
 
@@ -187,10 +189,10 @@ void loop()
   // --------------------------------
 
   // 連系しないので連系SWはOFF
-  grid_sw_command = false;
+  grid_sw_command = 0;
 
   // ゲート信号は常にArduinoから出力
-  gate_relay_command = true;
+  gate_relay_command = 1;
 
   // ゲートのduty比を反映。保護フラグが立っているときはDuty比ゼロ(ゲートブロック)
   if (protection_flag) {
@@ -214,7 +216,7 @@ void loop()
   Serial.print(",");
   Serial.print(current_pv);
   Serial.print(",");
-  Serial.println(pwmfreq);
+  Serial.print(pwmfreq);
   Serial.print(",");
   Serial.println(new_val_photod);
 #endif
@@ -324,7 +326,7 @@ void loop()
 /**
  * @brief 文字が数字'0'～'9'であるか判定する
  * @param c 文字
- * @return true: 数字を表す文字列である, false: 数字以外を表す文字列である
+ * @return 1: 数字を表す文字列である, 0: 数字以外を表す文字列である
  */
 bool isNumber(char c)
 {
